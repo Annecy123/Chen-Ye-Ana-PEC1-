@@ -1,0 +1,249 @@
+---
+title: "Primera prueba de evaluación continua"
+author: "Ana Chen"
+date: "2024-10-27"
+output:
+  pdf_document:
+    toc: no
+    toc_depth: 5
+    highlight: tango
+  html_document:
+    toc: no
+    toc_depth: '5'
+    df_print: paged
+subtitle: ANALISIS DE DATOS ÓMICOS
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{=tex}
+\newpage
+\thispagestyle{empty}
+```
+\mbox{}
+
+\tableofcontents
+
+\newpage
+
+# 0. Carga de paquetes
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install(version = "3.18")
+BiocManager::install("GEOquery")
+BiocManager::install("SummarizedExperiment")
+if (!require(ggplot2)) install.packages("ggplot2")
+
+```
+
+
+\newpage
+
+# 1. Introducción
+
+El objetivo de  la siguiente PEC es familirizarse con las herramientas y la exploración 
+multivariante de los datos. Básicamente el ejercicio nos pide trabajar con dataset 
+del repositorio de github i del repositorio metabolomicsWorkbench. 
+
+Posteriormente, creamos un contenedor del tipo SummarizedExperiment, con los datos y
+los metadatos por separado. Con esos datos realizaremos una visión general de los datos. 
+
+Finalmente la elaboración del informe final. 
+
+# 2. Selección de base de datos
+En esta PEC he escogido la base de datos de human_cachexia.csv, en el que consiste 
+en un estudio sobre el estado de pérdida mucular de paciente probablemente con alguna
+enfermedad crónica (cáncer, infecciones graves...). En la base nos dan las dos primeras 
+columnas, la primera que consiste en el ID del paciente y la segunda que consiste en 
+la categoría que pertenece cada paciente respecto a la pérdida de masa muscular (caquexia/normal).
+El resto de variables en las columnas, corresponden a variables bioquímicas, metabolitos comunes 
+como biomarcadores específicos. 
+
+
+# 3. Cargamos los datos y los metadatos
+
+Cargamos los datos de expresión metabolómica del data set seleccionado
+
+```{r}
+data <- read.csv("/Users/anachen/Desktop/human_cachexia.csv")
+colnames(data)
+head(data)
+```
+Separamos como nos especifica en el enunciado las columnas de expresión y los metadatos:
+Creamos una matriz para los datos de expresión (los metabolitos concretamente), para ello 
+seleccionamos todas las columnas excepto las dos primeras que corresponderán a las Id del paciente 
+y el estado de pérdida muscular).
+Posteriormente, creamos dos data.frames para los metadatos (será la información del dataset).
+Una que se llamará row_metadata que incluirá información sobre el ID del paciente y el estado de 
+pérdida muscular. Otra, col_metadata que corresponderá al dataframe de la expresión de metabolitos. 
+
+```{r message=FALSE, warning=FALSE}
+# Cargamos la librería
+library(SummarizedExperiment)
+
+expression_data <- as.matrix(data[, -c(1:2)])    
+row_metadata <- data[,c("Patient.ID", "Muscle.loss")]  
+col_metadata <- data.frame(Metabolite = colnames(expression_data)) 
+
+```
+
+Creamos el objeto SummarizedExperiment como nos pide en el enunciado. 
+
+```{r}
+se <- SummarizedExperiment(
+    assays = list(counts = expression_data),
+    rowData = row_metadata,
+    colData = col_metadata
+)
+
+print(se)
+
+```
+
+
+# 4. Exploración de los datos
+
+Mostramos las dimensiones del expressionset
+
+```{r}
+dim(se)
+
+```
+
+Nombres de los metadatos de filas y columnas
+```{r}
+colnames(rowData(se))
+colnames(colData(se))
+```
+
+
+Miramos la estructura del objeto 
+```{r}
+str(se)
+```
+
+
+Resumen estadístico de los datos de expresión, que nos proporciona un resumen estadístico de las
+variables de expresión de cada metabolito medido en las muestras obtenidas de los diferentes pacientes
+del dataset. Podemos observar la distribución y la variabilidad de los datos (valor mínimo, primer cuartil, 
+mediana, media, tercer cuartil y valor máximo). Esta información es fundamental a la hora de realizar cualquier 
+análisis posterior. 
+
+```{r}
+summary(assay(se))
+
+```
+
+Para hacerlo más visual podemos crear histogramas para expresar los valores anteriores.
+
+```{r}
+library(ggplot2)
+
+numeric_cols <- sapply(data, is.numeric)
+data_numeric <- data[, numeric_cols]
+
+par(mfrow = c(3, 3))  
+for (col in colnames(data_numeric)) {
+  hist(data_numeric[[col]], main = paste("Histograma de", col), xlab = col)
+}
+```
+También podemos observar la distribución de la variable categórica, pérdida muscular
+que classifica a los pacientes en dos grupos, en caquécticos y control. 
+```{r}
+
+table(data$Muscle.loss)
+```
+Podemos realiza un boxplot, para visualizar mejor la distribución de metabolitos en los pacientes
+categorizados según pérdida de masa muscular. El diagrama de cajas nos permiter ver la mediana, los cuartiles 
+y los valores atípicos de los datos, lo que facilita comparar visualmente estas estadísticas entre 
+diferentes grupos de pacientes. 
+
+
+
+```{r}
+boxplot(assay(se) ~ rowData(se)$Muscle.loss, main="Boxplot de Expresión por Pérdida de Músculo", xlab="Pérdida de Músculo", ylab="Expresión")
+
+```
+
+Podemos ver que en el grupo de caquexia presenta un grupo más grande de outliers, 
+y se distribuye de forma amplia el rango de valores de expresión de los metabolitos
+comparado con el grupo control. Esto puede presentar un significado biológico que 
+podría estar relacionado a la gravedad del estado de pérdida muscular en el cual no 
+vemos en el grupo control (sanos). 
+
+
+A continuación realizaremos un Análisis de Componentes Principales (PCA) sobre nuestro
+conjunto de expresión. La PCA es útil para reducir la dimensionalidad de nuestros datos 
+y nos permite visualizar patrones o agrupaciones que no serían tan sencillos de objetivar
+con los datos de alta dimensión. 
+
+Para ello preparamos primero nuestros datos. 
+Convirtiendo nuestros datos de expresión en una matriz, para ello excluinos las dos 
+primeras columnas que contienen información que no son valores de expresión como tal. 
+
+Posteriormente escalamos los datos para que tengan media cero y desviación estándar de 
+uno. También podemos realizar la función prcomp() que nos aseguran que los datos estan
+bien centrados y escalados. 
+
+```{r}
+expression_data <- as.matrix(data[, -c(1:2)])  
+
+expression_scaled <- scale(expression_data)
+
+pca_result <- prcomp(expression_scaled, center = TRUE, scale. = TRUE)
+
+```
+
+Finalmente creamos el gráfico de puntos de los componentes principales, en este caso 
+los dos primeros componentes principales que representan la mayor varianza en nuestro 
+dataset. 
+
+```{r}
+# Convertir a dataframe
+pca_data <- data.frame(PC1 = pca_result$x[,1], PC2 = pca_result$x[,2], Group = data$Muscle.loss)
+
+# Usar ggplot2 para visualizar
+ggplot(pca_data, aes(x = PC1, y = PC2, color = Group)) +
+  geom_point(alpha = 0.5, size = 3) +
+  geom_text(aes(label = Group), vjust = 1, hjust = 1) +
+  labs(x = "PC1 - Principal Component 1", y = "PC2 - Principal Component 2", title = "PCA Plot") +
+  theme_minimal()
+
+```
+
+Vemos que la distribución de los puntos presenta una superposición clara entre los dos 
+grupos categóricos del estado de masa mucular (caquexia y control), aunque podemos obervar que 
+hay alguos puntos de caquexia que están bastante alejados del grupo principal. La mayoría
+de los valores estan agrupados en el centro, esto significa que hay similitudes en los dos 
+primeros componentes principales. 
+
+Además podemos ver que la mayor varianza lo presenta el PC1 (componente principal 1), 
+esto podría indicar la existencia de algún proceso biológico diferencia nuestros dos grupos
+de estado de pérdida muscular. 
+
+Por otro lado, el PC2 (componente principal 2), muesra menos separación entre los grupos,
+por lo que parece contribuir menos en la diferencia entre estos. 
+
+
+# 5. Repositorio Github
+
+La dirección (url) del repositorio: https://github.com/Annecy123/Chen-Ye-Ana-PEC1-
+
+
+# 6. Referencias
+
+- Introducción a clases de datos tabulares en Bioconductor: https://github.com/ASPteaching/Omics_Data_Analysis-Case_Study_0-Introduction_to_BioC/blob/main/Introduction_2_Bioc_classes_4_tabular_data.pdf
+
+- ExpressionSet Introduction:  https://www.bioconductor.org/packages/devel/bioc/vignettes/Biobase/inst/doc/ExpressionSetIntroduction.pdf
+
+- Casos prácticos en análisis ómico: https://aspteaching.github.io/AMVCasos/
+
+- MetaboAnalyst para análisis y visualización de datos metabólicos: https://www.metaboanalyst.ca/docs/RTutorial.xhtml
+
+- Descripción de un conjunto de datos de Cachexia en Metabolómica: https://github.com/nutrimetabolomics/metaboData/blob/main/Datasets/2024-Cachexia/description.md?plain=1
+
+
